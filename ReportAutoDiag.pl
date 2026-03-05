@@ -17,6 +17,8 @@ binmode STDOUT, ':encoding(UTF-8)';  # in case of Unicode
 my $VER = "1.0";
 my $os = $^O;
 my $is_windows = 0;
+my $log_path = "report_debug_log.txt";
+my $LOG;
 my $path_connector;
 my $path_report;
 my $path_bf;
@@ -59,10 +61,24 @@ USAGE
 GetOptions(
     'debug'  => \$debug,
     'help|h'   => \$help,
-) or usage(2);
+) or usage(2) ;
 
 
-sub DEBUG  { return if !$debug; say "[DEBUG] @_"; }
+sub log_msg {
+    my ($msg) = @_;
+    chomp $msg;
+    my $line = "$msg\n";
+    print $line;        # STDOUT
+    print {$LOG} $line; # File
+    return;
+}
+
+sub DEBUG {
+    if ($debug) {
+      log_msg(" [DEBUG] @_");
+    }
+    return;
+}
 
 # Compare release numbers
 # Return -1, 0, 1 like <=> does
@@ -188,7 +204,6 @@ sub extract_json_lines {
 
 
 
-
 #############
 #   Inits   #
 #############
@@ -204,6 +219,8 @@ $path_prod = $ARGV[0];
 
 usage(0) if $help;   # will exit systematically
 
+open $LOG, '>', $log_path or die "Can't open $log_path: $!";
+
 DEBUG("Debug enabled");
 
 if ( $is_windows) {
@@ -217,7 +234,7 @@ if ( $is_windows) {
 	$path_bf_template =  "\"$path_prod\\toolbox\\polyspace\\psrptgen\\templates\\bug_finder\\BugFinder.rpt\"";
 } else {
 	$NUL = "/dev/null";
-	$path_connector = "$path_prod/polyspace/bin/glnx64/polyspace-connector";
+	$path_connector = "$path_prod/polyspace/bin/glnxa64/polyspace-connector";
 	$path_report =  "$path_prod/polyspace/bin/polyspace-report-generator";
 	$path_bf = "$path_prod/polyspace/bin/polyspace-bug-finder";
 	$path_bf_example = "$path_prod/polyspace/examples/cxx/Bug_Finder_Example/Module_1/BF_Result";
@@ -243,6 +260,7 @@ print <<END;
 ======================= 
 
 This utility assists in identifying and troubleshooting problems encountered while using the Polyspace Report Generator.
+The tool will generate a log file named $log_path to send to the support.
 
 END
 
@@ -251,19 +269,29 @@ END
 # - Product
 # - Size of the results
 
-print "= 1. Information =\n";
+log_msg("= 1. Information =");
 
 $command = "$path_bf -version";
 $out = qx{$command};
 ($full_version) = $out =~ /\(([^)]*)\)/;
 ($version) = $out =~ /(R\d{4}[ab])/;
 
-print " Version (including update): $full_version\n";
+log_msg(" Product version (including update): $full_version");
+
+# my $proxy = $ENV{'HTTP_PROXY'} // $ENV{'http_proxy'};
+my $proxy = $ENV{'HTTP_PROXY'};
+
+if (defined $proxy) {
+    print "Proxy = $proxy\n";
+else {
+    print "HTTP_PROXY is not set.\n";
+}
+
 
 if (0) {
 # 2. Test the report on a simple example with -debug
-print "\n= 2. Testing the Report Generator =\n";
-print "Using ('Bug Finder Example' with the Bug Finder template)\n";
+log_msg("\n= 2. Testing the Report Generator =");
+log_msg("Using 'Bug Finder Example' with the Bug Finder template");
 $command = "$path_report -results-dir $path_bf_example -output-name $temp_dir -template $path_bf_template -format HTML";
 DEBUG("The command is: $command\n");
 print "Please wait\n";
@@ -271,48 +299,44 @@ print "Please wait\n";
 $rc = system("$command > $NUL 2>&1");
 DEBUG("Command is done, result code: $rc\n");
 if ($rc == 0) {
-	print "Report generation was successful\n";
+	log_msg("Report generation was successful");
 } else {
-	print "Report generation failed\n";
+	log_msg("Report generation failed");
 }
 
 }
-# 3. if Ko, 
-
-# 4. if Ok
-
-print "\n= 3. Testing the connector =\n";
+# Test of the connector
+log_msg("\n= 3. Testing the connector =");
 
 $command = "$path_connector -server.port 9099 --profile matlab -debug";
-DEBUG("Command is $command\n");
 
-#$out = qx{$command  2>&1};
+# Launch the command in background
+if ($is_windows) {
+	$command = qq{start "" /B cmd /C $command};
+	# $command = qq{$command ^>> $log_path 2^>^&1};
+ } else {
+	 $command = qq{$command &};
+ }
+log_msg("Using the command: $command");
+system("$command 2>&1");
+print "toto\n";
 
-my $log = File::Spec->catfile(File::Spec->curdir(), 'myapp.log');
-#OK:    start "" /B cmd /c "L:\Program Files\Polyspace\R2026a\polyspace\bin\win64\polyspace-connector.exe" -server.port 9099 --profile matlab -debug > out.log 2>&1
-my $cmd = qq{start "" /B cmd /c $command ^> out.log 2^>^&1};
-		  
-print "command is $cmd\n";
-system($cmd);
-#print "out is $out\n";
+#wait 
+sleep 5;
 
-$command = "curl http://localhost:9099/polyspace/api/R2026a/connector/shutdown";
-qx{$command};
+# Terminate the connector
+$command = "curl http://localhost:9099/polyspace/api/$version/connector/shutdown";
+log_msg("\nClosing the connector using $command");
+if ($is_windows) {
+	qx{$command 2^>^&1};
+} else {
+	qx{$command 2>&1 &};
+}
 
-exit;
+# Get the metadata
+log_msg("\n= 4. Getting metadata from the connector =");
+log_msg("Using curl on localhost:9099/metadata");
 
-
-
-$rc = $? >> 8;
-
-print "The connector output is:\n";
-print "$out\n";
-
-#$command = "curl http://localhost:9099/polyspace/api/R2026a/connector/shutdown";
-#qx{cmd /c start "" $command};
-
-# get the metadata
-print "\n- Getting metadata from the connector\n";
 $command = "curl http://localhost:9099/metadata";
 DEBUG("Command is $command\n");
 
@@ -327,18 +351,32 @@ my $status_code    = $data->{status}{statusCode};
 my $access_version = $data->{payload}{'Access version'};
 my $release        = $data->{payload}{Release};
 
-print "\nstatusCode: $status_code\n";
-print "Access version: $access_version\n";
-print "Release: $release\n";
+log_msg("\nstatusCode: $status_code");
+log_msg("Access version: $access_version");
+log_msg("Release: $release");
 
-if (relcmp($version, 'R2026a') >= 0) {
 
+
+log_msg("\nFile $log_path generated, please send it to MathWorks");
+close($LOG);
+exit;
+
+# if (relcmp($version, 'R2026a') >= 0) {
+ 
+print "bf ex path $path_bf_example\n";
 $command = "curl --header \"Content-Type: application/json\" --request POST --data \"{ \\\"resultsFolderURI\\\": \\\"file:/$path_bf_example\\\" }\" http://localhost:9099/polyspace/api/$version/connector/result/summary";
 DEBUG("Command is $command");
-$out = qx{$command 2> $NUL};
-print "out put is $out\n";
+$out = qx{$command 2>&1};
+print "output is $out\n";
 
-}
+#shuting the connector down
+$command = "curl http://localhost:9099/polyspace/api/R2026a/connector/shutdown > $NUL 2>&1";
+qx{$command};
+$rc = $? >> 8;
+
+print "The connector output is:\n";
+print "$out\n";
+# }
 
 #http://localhost:9099/polyspace/api/R2026a/connector/shutdown
 
