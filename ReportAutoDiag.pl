@@ -1,11 +1,11 @@
 #!/usr/bin/perl
 
+use File::Spec;
 use File::Temp qw(tempdir);
 use JSON::PP qw(decode_json);
 use Getopt::Long qw(GetOptions);
 use strict;
 use warnings;
-use feature 'say';
 
 binmode STDOUT, ':encoding(UTF-8)';  # in case of Unicode
 
@@ -18,7 +18,10 @@ my $VER = "1.0";
 my $os = $^O;
 my $is_windows = 0;
 my $log_path = "report_debug_log.txt";
-my $LOG;
+my $LOG; # the file handler
+my $route_results_log = "route_results.json";
+my $connector_log = "connector_log.txt";
+my $ffh; # file handler, used multiple times
 my $path_connector;
 my $path_report;
 my $path_bf;
@@ -27,12 +30,13 @@ my $path_bf_template;
 my $command;
 my $temp_dir;
 my $rc;
-my $full_version; # R2025a Update 1
+my $full_version; # ex: R2025a Update 1
 my $version;  # R2025a
 my $out;
-my $debug  = 0;        # 0 = off
+my $debug  = 0;        
 my $help = 0;
 my $path_prod;
+my $path_results;
 my $NUL;
 my $json;
 
@@ -40,11 +44,10 @@ my $json;
 # Functions #
 #############
 
-
 sub usage {
     my ($exit) = @_;
     print <<"USAGE";
-Usage: $0 [options]
+Usage: $0 [options] PATH_TO_POLYSPACE PATH_TO_RESULTS
 
 Options:
   --debug         Enable debug output
@@ -211,6 +214,7 @@ sub extract_json_lines {
 $temp_dir = tempdir( CLEANUP => 1 );  # auto‑delete at end of scope
 $is_windows = ($os =~ /MSWin32/i);
 $path_prod = $ARGV[0];
+$path_results = $ARGV[1];
 
 
 ############
@@ -264,10 +268,12 @@ The tool will generate a log file named $log_path to send to the support.
 
 END
 
+############################
 # 1. Get information
 # - version including update
-# - Product
-# - Size of the results
+# - Proxy usage
+# - OS
+############################
 
 log_msg("= 1. Information =");
 
@@ -276,20 +282,34 @@ $out = qx{$command};
 ($full_version) = $out =~ /\(([^)]*)\)/;
 ($version) = $out =~ /(R\d{4}[ab])/;
 
-log_msg(" Product version (including update): $full_version");
+log_msg("Product version (including update): $full_version");
 
-# my $proxy = $ENV{'HTTP_PROXY'} // $ENV{'http_proxy'};
-my $proxy = $ENV{'HTTP_PROXY'};
+my $proxy = $ENV{'HTTP_PROXY'} // $ENV{'http_proxy'};
 
 if (defined $proxy) {
-    print "Proxy = $proxy\n";
-else {
-    print "HTTP_PROXY is not set.\n";
+    log_msg("Proxy = $proxy");
+} else {
+    log_msg("HTTP_PROXY is not set.");
+}
+
+log_msg("Script running on:");
+if ($os eq 'MSWin32') {
+    log_msg("Windows");
+} elsif ($os eq 'linux') {
+    log_msg("Linux");
+} elsif ($os eq 'darwin') {
+    log_msg("macOS");
+} else {
+    log_msg("Unknown OS: $os");
 }
 
 
-if (0) {
-# 2. Test the report on a simple example with -debug
+if (1) {
+####################################
+# 2. Test the report
+#  on a simple example with -debug
+####################################
+
 log_msg("\n= 2. Testing the Report Generator =");
 log_msg("Using 'Bug Finder Example' with the Bug Finder template");
 $command = "$path_report -results-dir $path_bf_example -output-name $temp_dir -template $path_bf_template -format HTML";
@@ -305,9 +325,15 @@ if ($rc == 0) {
 }
 
 }
-# Test of the connector
-log_msg("\n= 3. Testing the connector =");
 
+#########################################################################################
+# 3. Test of the connector
+# - in debug mode
+# - with the profile matlab (report generator)
+# - fetching json payload from the results route to get information on the results folder
+#########################################################################################
+
+log_msg("\n= 3. Testing the connector =");
 $command = "$path_connector -server.port 9099 --profile matlab -debug";
 
 # Launch the command in background
@@ -318,20 +344,66 @@ if ($is_windows) {
 	 $command = qq{$command &};
  }
 log_msg("Using the command: $command");
-system("$command 2>&1");
-print "toto\n";
+system("$command > $NUL 2>&1");
 
 #wait 
 sleep 5;
 
-# Terminate the connector
-$command = "curl http://localhost:9099/polyspace/api/$version/connector/shutdown";
-log_msg("\nClosing the connector using $command");
+log_msg("Generating the json of the route for results");
+my $url_format;
+
 if ($is_windows) {
-	qx{$command 2^>^&1};
+    my $temp_str = $path_results;
+    $temp_str =~ s/\\/\//g;
+    $url_format = "/$temp_str";
 } else {
-	qx{$command 2>&1 &};
+    $url_format = $path_results;
 }
+$command = "curl --header \"Content-Type: application/json\" --request POST --data \"{ \\\"resultsFolderURI\\\": \\\"file:$url_format\\\" }\" http://localhost:9099/polyspace/api/$version/connector/result/summary";
+DEBUG("Command is $command");
+$out = qx{$command 2>$NUL};
+
+open($ffh, '>', $route_results_log) or die "Cannot open file: $!";
+print $ffh $out;
+close($ffh) or die "Cannot close file: $!";
+log_msg("Done");
+
+#wait 
+sleep 5;
+
+log_msg("Get the connector log in the Preferences folder of the user.");
+my $home;
+my $polyspace_dir = File::Spec->catdir($home, '.matlab', $version, 'Polyspace');
+if ($is_windows) {
+    # Windows
+    $home = $ENV{'APPDATA'};
+ $polyspace_dir = File::Spec->catdir($home, 'MathWorks','MATLAB', $version, 'Polyspace');
+} else {
+    # Linux / Unix / macOS
+    $home = $ENV{'HOME'};
+ $polyspace_dir = File::Spec->catdir($home, '.matlab', $version, 'Polyspace');
+}
+
+die "Unable to determine home directory\n" unless defined $home;
+
+my @candidates = glob File::Spec->catfile($polyspace_dir, 'polyspace_connector_log_*');
+
+die "No files matching polyspace_connector_log_* in $polyspace_dir\n" unless @candidates;
+
+my ($latest) = sort { (stat($b))[9] <=> (stat($a))[9] } @candidates;
+my $contents;
+{
+    open my $fh, '<', $latest or die "Can't open $latest: $!";
+    local $/ = undef;            # enable slurp mode
+    $contents = <$fh>;
+    close $fh;
+}
+
+
+open($ffh, '>', $connector_log) or die "Cannot open file: $!";
+print $ffh $contents;
+close($ffh) or die "Cannot close file: $!";
+
 
 # Get the metadata
 log_msg("\n= 4. Getting metadata from the connector =");
@@ -341,7 +413,6 @@ $command = "curl http://localhost:9099/metadata";
 DEBUG("Command is $command\n");
 
 $out = qx{$command 2>&1};
-$rc = $? >> 8;
 DEBUG("output is $out");
 $json = extract_json_block($out);
 DEBUG("json : $json");
@@ -355,39 +426,17 @@ log_msg("\nstatusCode: $status_code");
 log_msg("Access version: $access_version");
 log_msg("Release: $release");
 
+# Terminate the connector
+$command = "curl http://localhost:9099/polyspace/api/$version/connector/shutdown";
+log_msg("\nClosing the connector using $command");
+if ($is_windows) {
+	qx{$command 2^>^&1};
+} else {
+	qx{$command 2>&1 &};
+}
 
-
-log_msg("\nFile $log_path generated, please send it to MathWorks");
+print("\nFiles $log_path, $route_results_log and $connector_log generated, please send them to MathWorks\n");
 close($LOG);
 exit;
 
 # if (relcmp($version, 'R2026a') >= 0) {
- 
-print "bf ex path $path_bf_example\n";
-$command = "curl --header \"Content-Type: application/json\" --request POST --data \"{ \\\"resultsFolderURI\\\": \\\"file:/$path_bf_example\\\" }\" http://localhost:9099/polyspace/api/$version/connector/result/summary";
-DEBUG("Command is $command");
-$out = qx{$command 2>&1};
-print "output is $out\n";
-
-#shuting the connector down
-$command = "curl http://localhost:9099/polyspace/api/R2026a/connector/shutdown > $NUL 2>&1";
-qx{$command};
-$rc = $? >> 8;
-
-print "The connector output is:\n";
-print "$out\n";
-# }
-
-#http://localhost:9099/polyspace/api/R2026a/connector/shutdown
-
-#PATH_TO_PRODUCT
-
-
-# proxy?
-
-# VPN?
-
-
-# launch the report with an example to know if the issue is project-specific
-
-  
