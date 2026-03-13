@@ -1,4 +1,4 @@
-# ReportAutoDiag
+# PolyspaceReportAutoDiag
 
 A lightweight diagnostic tool written in Perl and used to collect the information required to debug issues with the Polyspace Report Generator.
 
@@ -9,36 +9,38 @@ More information on troubleshooting the connector can also be found here: https:
 # Usage
 
 The Perl script takes two arguments:
- <path_to_product>: Path to the installed product whose report generator needs debugging.
- <path_to_results_folder>: Folder where the tool will write the generated diagnostic files. Must be writable.
+
+`<path_to_product>`: Path to the installed product whose report generator needs debugging.
+
+`<path_to_results_folder>`: Folder where the tool will write the generated diagnostic files. Must be writable.
 
 Under Linux the command to launch is then:
- perl ReportAutoDiag.pl <path_to_product> <path_to_results_folder>
 
-Under Windows, you can use the Perl installation available with the installation of Polyspace. Indeed a Perl executable is available in <PATH_TO_PRODUCT>\sys\perl\win32\bin\perl.exe.
-You can use a .bat script:
+ `perl ReportAutoDiag.pl <path_to_product> <path_to_results_folder>`
 
-`@echo off
+Under Windows, you can use the Perl installation available with the installation of Polyspace. Indeed a Perl executable is available in `<PATH_TO_PRODUCT>\sys\perl\win32\bin\perl.exe`.
+Here is a .bat script that will launch perl with the Perl script in argument:
+
+```bat
+@echo off
 
 :: Change the following path to your Polyspace installation
-set PATH_TO_PRODUCT=L:\Program Files\Polyspace\R2026a
+set PATH_TO_PRODUCT=C:\Program Files\Polyspace\R2026a
 
 :: Change the following path to your Polyspace installation
-set PATH_TO_RESULTS=L:\Program Files\Polyspace\R2026a\polyspace\examples\cxx\Bug_Finder_Example\Module_1\BF_Result
+set PATH_TO_RESULTS=C:\Workspace\Polyspace\MyProject\BF_Result
 	
-"%PATH_TO_PRODUCT%"\sys\perl\win32\bin\perl.exe  ReportAutoDiag.pl --debug "%PATH_TO_PRODUCT%" "%PATH_TO_RESULTS%"`
+"%PATH_TO_PRODUCT%"\sys\perl\win32\bin\perl.exe ReportAutoDiag.pl --debug "%PATH_TO_PRODUCT%" "%PATH_TO_RESULTS%"
+```
 
 # Output
 After execution, the tool creates three text files inside the execution folder:
 
-connector_log.txt
-The log of a component called connector.
+* `connector_log.txt`: The log of a component called connector.
 
-route_results.json
-A Json file created via a route to get information on the results folder (2nd argument of the tool)
+* `route_results.json`: A Json file created via a route to get information on the results folder (2nd argument of the tool)
 
-report_debug_log.txt
-Contains collected diagnostic output, extracted logs, and useful debugging traces.
+* `report_debug_log.txt`: Contains collected diagnostic output, extracted logs, and useful debugging traces.
 
 These files are required for the support team to properly reproduce and analyze the issue.
 
